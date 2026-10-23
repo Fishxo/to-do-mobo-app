@@ -10,34 +10,63 @@ import 'add_task_screen.dart';
 enum TaskFilter { all, active, completed }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.taskService});
+
+  final TaskService? taskService;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final TaskService _taskService = TaskService.instance;
+  late final TaskService _taskService;
 
   List<Task> _tasks = const [];
   TaskFilter _filter = TaskFilter.all;
+  bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    _taskService = widget.taskService ?? TaskService.instance;
     _loadTasks();
   }
 
   Future<void> _loadTasks() async {
-    final List<Task> tasks = await _taskService.getTasks();
-    if (!mounted) return;
-    setState(() {
-      _tasks = tasks;
-    });
+    try {
+      final List<Task> tasks = await _taskService.getTasks();
+      if (!mounted) return;
+      setState(() {
+        _tasks = tasks;
+        _isLoading = false;
+        _errorMessage = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Could not load your tasks. Please try again.';
+      });
+    }
   }
 
-  int get _remainingCount =>
-      _tasks.where((task) => !task.isCompleted).length;
+  Future<void> _retryLoad() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    await _loadTasks();
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  int get _remainingCount => _tasks.where((task) => !task.isCompleted).length;
 
   List<Task> get _visibleTasks {
     switch (_filter) {
@@ -50,27 +79,57 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  String get _emptyTitle {
+    switch (_filter) {
+      case TaskFilter.all:
+        return 'No tasks yet';
+      case TaskFilter.active:
+        return 'No active tasks';
+      case TaskFilter.completed:
+        return 'No completed tasks';
+    }
+  }
+
+  String get _emptyMessage {
+    switch (_filter) {
+      case TaskFilter.all:
+        return 'Tap "Add Task" to create your first task.';
+      case TaskFilter.active:
+        return 'Everything is done. Add a new task or enjoy the break.';
+      case TaskFilter.completed:
+        return 'Completed tasks will appear here.';
+    }
+  }
+
   Future<void> _openAddTask() async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const AddTaskScreen()),
+      MaterialPageRoute(
+        builder: (_) => AddTaskScreen(taskService: _taskService),
+      ),
     );
-    // Refresh the list in case a task was added.
+    if (!mounted) return;
     await _loadTasks();
   }
 
   Future<void> _openEditTask(Task task) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => AddTaskScreen(task: task)),
+      MaterialPageRoute(
+        builder: (_) => AddTaskScreen(task: task, taskService: _taskService),
+      ),
     );
-    // Refresh the list in case the task was edited.
+    if (!mounted) return;
     await _loadTasks();
   }
 
   Future<void> _toggleTask(Task task) async {
-    await _taskService.toggleTask(task.id);
-    await _loadTasks();
+    try {
+      await _taskService.toggleTask(task.id);
+      await _loadTasks();
+    } catch (_) {
+      _showError('Could not update the task. Please try again.');
+    }
   }
 
   Future<void> _confirmDelete(Task task) async {
@@ -96,8 +155,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (confirmed != true) return;
-    await _taskService.deleteTask(task.id);
-    await _loadTasks();
+
+    try {
+      await _taskService.deleteTask(task.id);
+      await _loadTasks();
+    } catch (_) {
+      _showError('Could not delete the task. Please try again.');
+    }
   }
 
   @override
@@ -140,8 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: _FilterChip(
                     label: 'All',
                     selected: _filter == TaskFilter.all,
-                    onSelected: () =>
-                        setState(() => _filter = TaskFilter.all),
+                    onSelected: () => setState(() => _filter = TaskFilter.all),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -167,29 +230,78 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           // Task list
-          Expanded(
-            child: visibleTasks.isEmpty
-                ? const EmptyTaskView()
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 96),
-                    itemCount: visibleTasks.length,
-                    itemBuilder: (context, index) {
-                      final Task task = visibleTasks[index];
-                      return TaskItem(
-                        task: task,
-                        onTap: () => _openEditTask(task),
-                        onToggle: () => _toggleTask(task),
-                        onDelete: () => _confirmDelete(task),
-                      );
-                    },
-                  ),
-          ),
+          Expanded(child: _buildTaskList(visibleTasks)),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openAddTask,
         icon: const Icon(Icons.add),
         label: const Text('Add Task'),
+      ),
+    );
+  }
+
+  Widget _buildTaskList(List<Task> visibleTasks) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final String? errorMessage = _errorMessage;
+    if (errorMessage != null) {
+      return _TaskLoadError(message: errorMessage, onRetry: _retryLoad);
+    }
+
+    if (visibleTasks.isEmpty) {
+      return EmptyTaskView(title: _emptyTitle, message: _emptyMessage);
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 96),
+      itemCount: visibleTasks.length,
+      itemBuilder: (context, index) {
+        final Task task = visibleTasks[index];
+        return TaskItem(
+          task: task,
+          onTap: () => _openEditTask(task),
+          onToggle: () => _toggleTask(task),
+          onDelete: () => _confirmDelete(task),
+        );
+      },
+    );
+  }
+}
+
+/// Shown when SQLite could not be read, with a button to try again.
+class _TaskLoadError extends StatelessWidget {
+  const _TaskLoadError({required this.message, required this.onRetry});
+
+  final String message;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: onRetry,
+              child: const Text('Try again'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -210,10 +322,7 @@ class _FilterChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChoiceChip(
-      label: Align(
-        alignment: Alignment.center,
-        child: Text(label),
-      ),
+      label: Align(alignment: Alignment.center, child: Text(label)),
       selected: selected,
       showCheckmark: false,
       onSelected: (_) => onSelected(),

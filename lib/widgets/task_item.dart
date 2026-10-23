@@ -25,8 +25,9 @@ class TaskItem extends StatelessWidget {
     final Color textColor = task.isCompleted
         ? theme.colorScheme.onSurfaceVariant
         : theme.colorScheme.onSurface;
-    final TextDecoration decoration =
-        task.isCompleted ? TextDecoration.lineThrough : TextDecoration.none;
+    final TextDecoration decoration = task.isCompleted
+        ? TextDecoration.lineThrough
+        : TextDecoration.none;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -37,10 +38,7 @@ class TaskItem extends StatelessWidget {
           padding: const EdgeInsets.only(right: 4),
           child: Row(
             children: [
-              Checkbox(
-                value: task.isCompleted,
-                onChanged: (_) => onToggle(),
-              ),
+              Checkbox(value: task.isCompleted, onChanged: (_) => onToggle()),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

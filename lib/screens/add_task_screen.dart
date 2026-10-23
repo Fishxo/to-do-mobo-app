@@ -6,9 +6,10 @@ import '../services/task_service.dart';
 /// Screen used to both add a new task and edit an existing one.
 /// Pass a [task] to edit it, leave it empty to create a new task.
 class AddTaskScreen extends StatefulWidget {
-  const AddTaskScreen({super.key, this.task});
+  const AddTaskScreen({super.key, this.task, this.taskService});
 
   final Task? task;
+  final TaskService? taskService;
 
   @override
   State<AddTaskScreen> createState() => _AddTaskScreenState();
@@ -18,15 +19,21 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController;
   late final TextEditingController _descriptionController;
+  late final TaskService _taskService;
+
+  bool _isSaving = false;
+  String? _errorMessage;
 
   bool get _isEditing => widget.task != null;
 
   @override
   void initState() {
     super.initState();
+    _taskService = widget.taskService ?? TaskService.instance;
     _titleController = TextEditingController(text: widget.task?.title ?? '');
-    _descriptionController =
-        TextEditingController(text: widget.task?.description ?? '');
+    _descriptionController = TextEditingController(
+      text: widget.task?.description ?? '',
+    );
   }
 
   @override
@@ -37,36 +44,49 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
   }
 
   Future<void> _save() async {
-    // Validate the form before saving.
+    if (_isSaving) return;
     if (!_formKey.currentState!.validate()) return;
+
+    FocusScope.of(context).unfocus();
 
     final String title = _titleController.text.trim();
     final String description = _descriptionController.text.trim();
 
-    if (_isEditing) {
-      await TaskService.instance.updateTask(
-        widget.task!.id,
-        title: title,
-        description: description,
-      );
-    } else {
-      await TaskService.instance.addTask(
-        title: title,
-        description: description,
-      );
-    }
+    setState(() {
+      _isSaving = true;
+      _errorMessage = null;
+    });
 
-    if (!mounted) return;
-    Navigator.pop(context);
+    try {
+      if (_isEditing) {
+        await _taskService.updateTask(
+          widget.task!.copyWith(title: title, description: description),
+        );
+      } else {
+        await _taskService.addTask(title: title, description: description);
+      }
+
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _errorMessage = 'Could not save the task. Please try again.';
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final String? errorMessage = _errorMessage;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? 'Edit Task' : 'Add Task'),
         leading: IconButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _isSaving ? null : () => Navigator.pop(context),
           icon: const Icon(Icons.arrow_back),
           tooltip: 'Back',
         ),
@@ -79,6 +99,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
             TextFormField(
               controller: _titleController,
               autofocus: !_isEditing,
+              enabled: !_isSaving,
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
                 labelText: 'Title',
@@ -96,20 +117,36 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
               controller: _descriptionController,
               minLines: 2,
               maxLines: 4,
+              enabled: !_isSaving,
               textInputAction: TextInputAction.done,
               decoration: const InputDecoration(
                 labelText: 'Description',
                 hintText: 'Optional details',
               ),
             ),
+            if (errorMessage != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                errorMessage,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             FilledButton(
-              onPressed: _save,
-              child: Text(_isEditing ? 'Save Changes' : 'Save'),
+              onPressed: _isSaving ? null : _save,
+              child: _isSaving
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(_isEditing ? 'Save Changes' : 'Save'),
             ),
             const SizedBox(height: 8),
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: _isSaving ? null : () => Navigator.pop(context),
               child: const Text('Cancel'),
             ),
           ],
