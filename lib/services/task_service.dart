@@ -1,105 +1,66 @@
 import '../models/task.dart';
+import 'database_service.dart';
 
-/// Manages all task data.
+/// The single entry point for task operations.
 ///
-/// For now everything is stored in memory (nothing survives an app restart).
-/// Every task operation of the app goes through this service, so when the
-/// backend is ready these methods can be replaced by HTTP calls
-/// without changing the UI code.
+/// The UI only calls this class. It does not know whether the data comes from
+/// SQLite today or from a future REST API. Because the storage is hidden behind
+/// [TaskStore], an API data source can be added later without touching widgets.
 class TaskService {
-  TaskService._() {
-    _tasks.addAll(_sampleTasks());
-    _nextId = _tasks.length + 1;
+  TaskService({TaskStore? store}) : _store = store ?? DatabaseService.instance;
+
+  /// Shared instance used by the screens in the real app.
+  static final TaskService instance = TaskService();
+
+  final TaskStore _store;
+
+  /// Returns every saved task, newest last.
+  Future<List<Task>> getTasks() {
+    return _store.getTasks();
   }
 
-  /// Single shared instance so every screen works with the same task list.
-  static final TaskService instance = TaskService._();
+  /// Creates and saves a new task. SQLite assigns the real id.
+  Future<Task> addTask({required String title, String? description}) {
+    final String trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw ArgumentError.value(title, 'title', 'Title cannot be empty');
+    }
 
-  final List<Task> _tasks = [];
-  int _nextId = 1;
-
-  /// Returns all tasks.
-  Future<List<Task>> getTasks() async {
-    return List<Task>.from(_tasks);
-  }
-
-  /// Creates a new task.
-  Future<Task> addTask({
-    required String title,
-    String description = '',
-  }) async {
-    final task = Task(
-      id: _nextId++,
-      title: title,
-      description: description,
+    final Task task = Task(
+      id: 0,
+      title: trimmedTitle,
+      description: description?.trim() ?? '',
       isCompleted: false,
       createdAt: DateTime.now(),
     );
-    _tasks.add(task);
-    return task;
+
+    return _store.insertTask(task);
   }
 
-  /// Updates the title and description of an existing task.
-  Future<Task> updateTask(
-    int id, {
-    required String title,
-    required String description,
-  }) async {
-    final index = _tasks.indexWhere((task) => task.id == id);
-    if (index == -1) {
-      throw StateError('Task with id $id was not found');
-    }
-    final updated = _tasks[index].copyWith(
-      title: title,
-      description: description,
-    );
-    _tasks[index] = updated;
-    return updated;
+  /// Finds one task by id, or returns `null` when it does not exist.
+  Future<Task?> getTaskById(int id) {
+    return _store.getTaskById(id);
   }
 
-  /// Removes a task.
-  Future<void> deleteTask(int id) async {
-    _tasks.removeWhere((task) => task.id == id);
+  /// Saves changes to an existing task.
+  Future<void> updateTask(Task task) {
+    return _store.updateTask(task);
   }
 
-  /// Switches a task between active and completed.
+  /// Deletes a task by id.
+  Future<void> deleteTask(int id) {
+    return _store.deleteTask(id);
+  }
+
+  /// Flips a task between active and completed and saves the new value.
   Future<Task> toggleTask(int id) async {
-    final index = _tasks.indexWhere((task) => task.id == id);
-    if (index == -1) {
+    final Task? task = await _store.getTaskById(id);
+    if (task == null) {
       throw StateError('Task with id $id was not found');
     }
-    final updated = _tasks[index].copyWith(
-      isCompleted: !_tasks[index].isCompleted,
-    );
-    _tasks[index] = updated;
-    return updated;
-  }
 
-  /// A few sample tasks so the app is not empty on first launch.
-  List<Task> _sampleTasks() {
-    final now = DateTime.now();
-    return [
-      Task(
-        id: 1,
-        title: 'Study Flutter',
-        description: 'Learn widgets and navigation',
-        isCompleted: true,
-        createdAt: now,
-      ),
-      Task(
-        id: 2,
-        title: 'Build To-Do UI',
-        description: 'Create the first mobile interface',
-        isCompleted: false,
-        createdAt: now,
-      ),
-      Task(
-        id: 3,
-        title: 'Connect API',
-        description: 'Later connect the Flutter app to the backend',
-        isCompleted: false,
-        createdAt: now,
-      ),
-    ];
+    final Task updated = task.copyWith(isCompleted: !task.isCompleted);
+    await _store.updateTask(updated);
+    return updated;
   }
 }
