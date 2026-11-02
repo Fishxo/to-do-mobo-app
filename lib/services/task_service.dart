@@ -1,4 +1,6 @@
+import '../models/subtask.dart';
 import '../models/task.dart';
+import '../models/task_priority.dart';
 import 'database_service.dart';
 
 /// The single entry point for task operations.
@@ -14,27 +16,13 @@ class TaskService {
 
   final TaskStore _store;
 
-  /// Returns every saved task, newest last.
+  /// Exposes the shared store so the category service can use the same
+  /// database (or the same in-memory store in tests).
+  TaskStore get store => _store;
+
+  /// Returns every saved task, newest last, including their subtasks.
   Future<List<Task>> getTasks() {
     return _store.getTasks();
-  }
-
-  /// Creates and saves a new task. SQLite assigns the real id.
-  Future<Task> addTask({required String title, String? description}) {
-    final String trimmedTitle = title.trim();
-    if (trimmedTitle.isEmpty) {
-      throw ArgumentError.value(title, 'title', 'Title cannot be empty');
-    }
-
-    final Task task = Task(
-      id: 0,
-      title: trimmedTitle,
-      description: description?.trim() ?? '',
-      isCompleted: false,
-      createdAt: DateTime.now(),
-    );
-
-    return _store.insertTask(task);
   }
 
   /// Finds one task by id, or returns `null` when it does not exist.
@@ -42,12 +30,76 @@ class TaskService {
     return _store.getTaskById(id);
   }
 
-  /// Saves changes to an existing task.
-  Future<void> updateTask(Task task) {
-    return _store.updateTask(task);
+  /// Creates and saves a new task. SQLite assigns the real id.
+  Future<Task> addTask({
+    required String title,
+    String? description,
+    int? categoryId,
+    TaskPriority priority = TaskPriority.medium,
+    DateTime? dueDate,
+    DateTime? reminderAt,
+    List<String> subtaskTitles = const [],
+  }) async {
+    final String trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw ArgumentError.value(title, 'title', 'Title cannot be empty');
+    }
+
+    final DateTime now = DateTime.now();
+    final Task task = Task(
+      id: 0,
+      title: trimmedTitle,
+      description: description?.trim() ?? '',
+      isCompleted: false,
+      createdAt: now,
+      categoryId: categoryId,
+      priority: priority,
+      dueDate: dueDate,
+      reminderAt: reminderAt,
+      updatedAt: now,
+    );
+
+    final Task saved = await _store.insertTask(task);
+    final List<Subtask> subtasks = [];
+
+    for (final String subtaskTitle in subtaskTitles) {
+      final String trimmed = subtaskTitle.trim();
+      if (trimmed.isEmpty) continue;
+      subtasks.add(
+        await _store.insertSubtask(
+          Subtask(
+            id: 0,
+            taskId: saved.id,
+            title: trimmed,
+            isCompleted: false,
+            createdAt: DateTime.now(),
+          ),
+        ),
+      );
+    }
+
+    return saved.copyWith(subtasks: subtasks);
   }
 
-  /// Deletes a task by id.
+  /// Saves changes to an existing task.
+  Future<void> updateTask(Task task) async {
+    final String trimmedTitle = task.title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw ArgumentError.value(task.title, 'title', 'Title cannot be empty');
+    }
+
+    final DateTime now = DateTime.now();
+    await _store.updateTask(
+      task.copyWith(
+        title: trimmedTitle,
+        description: task.description.trim(),
+        updatedAt: now,
+        completedAt: task.isCompleted ? task.completedAt ?? now : null,
+      ),
+    );
+  }
+
+  /// Deletes a task by id. Its subtasks are removed by the database cascade.
   Future<void> deleteTask(int id) {
     return _store.deleteTask(id);
   }
@@ -59,8 +111,75 @@ class TaskService {
       throw StateError('Task with id $id was not found');
     }
 
-    final Task updated = task.copyWith(isCompleted: !task.isCompleted);
+    final DateTime now = DateTime.now();
+    final bool completed = !task.isCompleted;
+    final Task updated = task.copyWith(
+      isCompleted: completed,
+      completedAt: completed ? now : null,
+      updatedAt: now,
+    );
     await _store.updateTask(updated);
     return updated;
+  }
+
+  /// Inserts a task from an import file. The id is always regenerated so the
+  /// import cannot overwrite existing rows.
+  Future<Task> importTask(Task task) async {
+    final Task saved = await _store.insertTask(task.copyWith(id: 0));
+    final List<Subtask> subtasks = [];
+
+    for (final Subtask subtask in task.subtasks) {
+      subtasks.add(
+        await _store.insertSubtask(
+          Subtask(
+            id: 0,
+            taskId: saved.id,
+            title: subtask.title,
+            isCompleted: subtask.isCompleted,
+            createdAt: subtask.createdAt,
+          ),
+        ),
+      );
+    }
+
+    return saved.copyWith(subtasks: subtasks);
+  }
+
+  Future<Subtask> addSubtask({
+    required int taskId,
+    required String title,
+  }) async {
+    final String trimmed = title.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError.value(
+        title,
+        'title',
+        'Subtask title cannot be empty',
+      );
+    }
+
+    return _store.insertSubtask(
+      Subtask(
+        id: 0,
+        taskId: taskId,
+        title: trimmed,
+        isCompleted: false,
+        createdAt: DateTime.now(),
+      ),
+    );
+  }
+
+  Future<void> toggleSubtask(Subtask subtask) {
+    return _store.updateSubtask(
+      subtask.copyWith(isCompleted: !subtask.isCompleted),
+    );
+  }
+
+  Future<void> deleteSubtask(int subtaskId) {
+    return _store.deleteSubtask(subtaskId);
+  }
+
+  Future<void> clearCompletedTasks() {
+    return _store.clearCompletedTasks();
   }
 }
