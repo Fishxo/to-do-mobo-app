@@ -5,6 +5,7 @@ import '../models/task.dart';
 import '../state/app_controller.dart';
 import '../utils/formatting.dart';
 import '../utils/theme_colors.dart';
+import '../utils/task_filters.dart';
 import '../widgets/empty_task_view.dart';
 import '../widgets/section_header.dart';
 import '../widgets/stat_card.dart';
@@ -12,8 +13,7 @@ import '../widgets/task_item.dart';
 import 'add_task_screen.dart';
 import 'task_details_screen.dart';
 
-/// Which subset of tasks is currently visible.
-enum TaskFilter { all, today, upcoming, completed, overdue }
+/// Filters use the shared TaskFilter from task_filters.dart.
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.controller, this.onOpenSettings});
@@ -31,38 +31,10 @@ class _HomeScreenState extends State<HomeScreen> {
   AppController get _controller => widget.controller;
 
   List<Task> get _visibleTasks {
-    final DateTime now = DateTime.now();
-    final DateTime startOfTomorrow = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).add(const Duration(days: 1));
-
-    final List<Task> filtered;
-    switch (_filter) {
-      case TaskFilter.all:
-        filtered = _controller.tasks.toList();
-      case TaskFilter.today:
-        filtered = _controller.tasks
-            .where(
-              (task) => task.dueDate != null && isSameDay(task.dueDate!, now),
-            )
-            .toList();
-      case TaskFilter.upcoming:
-        filtered = _controller.tasks
-            .where(
-              (task) =>
-                  !task.isCompleted &&
-                  task.dueDate != null &&
-                  task.dueDate!.isAfter(startOfTomorrow),
-            )
-            .toList();
-      case TaskFilter.completed:
-        filtered = _controller.tasks.where((task) => task.isCompleted).toList();
-      case TaskFilter.overdue:
-        filtered = _controller.tasks.where((task) => task.isOverdue).toList();
-    }
-
+    final List<Task> filtered = filterTasks(
+      _controller.tasks.toList(growable: false),
+      _filter,
+    );
     filtered.sort(
       (a, b) => _compareTasks(a, b, _controller.settings.sortOption),
     );
@@ -97,35 +69,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   int _countFor(TaskFilter filter) {
-    final DateTime now = DateTime.now();
-    final DateTime startOfTomorrow = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).add(const Duration(days: 1));
-    switch (filter) {
-      case TaskFilter.all:
-        return _controller.tasks.length;
-      case TaskFilter.today:
-        return _controller.tasks
-            .where(
-              (task) => task.dueDate != null && isSameDay(task.dueDate!, now),
-            )
-            .length;
-      case TaskFilter.upcoming:
-        return _controller.tasks
-            .where(
-              (task) =>
-                  !task.isCompleted &&
-                  task.dueDate != null &&
-                  task.dueDate!.isAfter(startOfTomorrow),
-            )
-            .length;
-      case TaskFilter.completed:
-        return _controller.tasks.where((task) => task.isCompleted).length;
-      case TaskFilter.overdue:
-        return _controller.tasks.where((task) => task.isOverdue).length;
-    }
+    return filterTasks(
+      _controller.tasks.toList(growable: false),
+      filter,
+    ).length;
   }
 
   String get _emptyTitle {
@@ -140,6 +87,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return 'No completed tasks';
       case TaskFilter.overdue:
         return 'Nothing overdue';
+      case TaskFilter.pending:
+        return 'No pending tasks';
     }
   }
 
@@ -155,6 +104,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return 'Finished tasks will show up here.';
       case TaskFilter.overdue:
         return 'Great news — you are all caught up.';
+      case TaskFilter.pending:
+        return 'No pending tasks';
     }
   }
 
@@ -379,6 +330,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               value: _controller.statistics.pending,
                               icon: Icons.pending_outlined,
                               color: warningColor(theme.colorScheme),
+                              onTap: () =>
+                                  setState(() => _filter = TaskFilter.pending),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -528,6 +481,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return 'Completed';
       case TaskFilter.overdue:
         return 'Overdue';
+      case TaskFilter.pending:
+        return 'Pending';
     }
   }
 }

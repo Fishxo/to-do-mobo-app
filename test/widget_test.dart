@@ -9,6 +9,7 @@ import 'package:todoapp/models/task_priority.dart';
 import 'package:todoapp/services/database_service.dart';
 import 'package:todoapp/services/statistics_service.dart';
 import 'package:todoapp/services/task_service.dart';
+import 'package:todoapp/utils/task_filters.dart';
 
 class _InMemoryTaskStore implements TaskStore {
   _InMemoryTaskStore([Iterable<Task> tasks = const []])
@@ -272,7 +273,7 @@ void main() {
 
     expect(stats.total, 3);
     expect(stats.completed, 1);
-    expect(stats.pending, 2);
+    expect(stats.pending, 1);
     expect(stats.overdue, 1);
     expect(stats.lastSevenDays, hasLength(7));
     expect(stats.weeklyCompletionPercentage, inInclusiveRange(0, 100));
@@ -307,6 +308,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Connect API'), findsOneWidget);
+    expect(find.text('Study Flutter'), findsNothing);
+
+    await tester.tap(find.text('Pending (1)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Build To-Do UI'), findsOneWidget);
+    expect(find.text('Connect API'), findsNothing);
     expect(find.text('Study Flutter'), findsNothing);
 
     await tester.tap(find.text('All (3)'));
@@ -527,5 +535,52 @@ void main() {
       find.byType(MaterialApp),
     );
     expect(app.themeMode, ThemeMode.dark);
+  });
+
+  test('pending filter excludes completed, overdue, and includes today/no-date tasks', () {
+    final DateTime now = DateTime.now();
+    final List<Task> tasks = [
+      Task(
+        id: 1,
+        title: 'Completed today',
+        description: '',
+        isCompleted: true,
+        createdAt: now,
+        dueDate: now,
+      ),
+      Task(
+        id: 2,
+        title: 'Due today',
+        description: '',
+        isCompleted: false,
+        createdAt: now,
+        dueDate: now,
+      ),
+      Task(
+        id: 3,
+        title: 'No due date',
+        description: '',
+        isCompleted: false,
+        createdAt: now,
+      ),
+      Task(
+        id: 4,
+        title: 'Overdue',
+        description: '',
+        isCompleted: false,
+        createdAt: now,
+        dueDate: now.subtract(const Duration(days: 2)),
+      ),
+    ];
+
+    final List<Task> pending = filterTasks(tasks, TaskFilter.pending);
+
+    expect(
+      pending.map((task) => task.title),
+      containsAll(['Due today', 'No due date']),
+    );
+    expect(pending, hasLength(2));
+    expect(filterTasks(tasks, TaskFilter.completed), hasLength(1));
+    expect(filterTasks(tasks, TaskFilter.overdue), hasLength(1));
   });
 }
