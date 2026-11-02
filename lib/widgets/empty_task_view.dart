@@ -2,10 +2,16 @@ import 'package:flutter/material.dart';
 
 /// Shown when the selected filter has no tasks.
 class EmptyTaskView extends StatelessWidget {
-  const EmptyTaskView({super.key, this.title = 'No tasks found', this.message});
+  const EmptyTaskView({
+    super.key,
+    this.title = 'No tasks found',
+    this.message,
+    this.icon = Icons.inbox_outlined,
+  });
 
   final String title;
   final String? message;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
@@ -14,22 +20,28 @@ class EmptyTaskView extends StatelessWidget {
 
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.inbox_outlined,
-              size: 72,
-              color: theme.colorScheme.outline,
+            Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                size: 38,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              style: theme.textTheme.titleMedium,
             ),
             if (message != null) ...[
               const SizedBox(height: 6),
@@ -37,7 +49,7 @@ class EmptyTaskView extends StatelessWidget {
                 message,
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.outline,
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
             ],

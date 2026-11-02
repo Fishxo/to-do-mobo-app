@@ -170,7 +170,7 @@ You run `flutter run`
 
 ```dart
 void main() {              // 1. App starts here
-  runApp(const MyApp());   // 2. Launch the app
+  runApp(const MyApp());   // 2. Launch the appook
 }
 
 class MyApp extends StatelessWidget {
