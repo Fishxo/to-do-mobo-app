@@ -54,6 +54,7 @@ class AppController extends ChangeNotifier {
   bool get notificationsAvailable => _notificationService.isAvailable;
   bool get notificationPermissionGranted =>
       _notificationService.permissionGranted;
+  NotificationService get notificationService => _notificationService;
 
   TaskStatistics get statistics => StatisticsService().calculate(_tasks);
 

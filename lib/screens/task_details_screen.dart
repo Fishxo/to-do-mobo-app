@@ -67,7 +67,11 @@ class TaskDetailsScreen extends StatelessWidget {
         if (task == null) {
           return Scaffold(
             appBar: AppBar(title: const Text('Task details')),
-            body: const Center(child: Text('This task no longer exists.')),
+            body: Center(
+              child: controller.isLoading
+                  ? const CircularProgressIndicator()
+                  : const Text('This task no longer exists.'),
+            ),
           );
         }
 
