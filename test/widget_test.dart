@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:todoapp/main.dart';
 import 'package:todoapp/models/category.dart';
@@ -7,8 +8,11 @@ import 'package:todoapp/models/subtask.dart';
 import 'package:todoapp/models/task.dart';
 import 'package:todoapp/models/task_priority.dart';
 import 'package:todoapp/services/database_service.dart';
+import 'package:todoapp/services/notification_service.dart';
 import 'package:todoapp/services/statistics_service.dart';
 import 'package:todoapp/services/task_service.dart';
+import 'package:todoapp/state/app_controller.dart';
+import 'package:todoapp/utils/task_filters.dart';
 
 class _InMemoryTaskStore implements TaskStore {
   _InMemoryTaskStore([Iterable<Task> tasks = const []])
@@ -272,7 +276,7 @@ void main() {
 
     expect(stats.total, 3);
     expect(stats.completed, 1);
-    expect(stats.pending, 2);
+    expect(stats.pending, 1);
     expect(stats.overdue, 1);
     expect(stats.lastSevenDays, hasLength(7));
     expect(stats.weeklyCompletionPercentage, inInclusiveRange(0, 100));
@@ -307,6 +311,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Connect API'), findsOneWidget);
+    expect(find.text('Study Flutter'), findsNothing);
+
+    await tester.tap(find.text('Pending (1)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Build To-Do UI'), findsOneWidget);
+    expect(find.text('Connect API'), findsNothing);
     expect(find.text('Study Flutter'), findsNothing);
 
     await tester.tap(find.text('All (3)'));
@@ -527,5 +538,260 @@ void main() {
       find.byType(MaterialApp),
     );
     expect(app.themeMode, ThemeMode.dark);
+  });
+
+  testWidgets('calendar opens a date in day view and shows its tasks', (
+    WidgetTester tester,
+  ) async {
+    final DateTime now = DateTime.now();
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+
+    await _pumpApp(tester, store);
+    await tester.tap(find.byIcon(Icons.calendar_month_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('calendar-view-month')), findsOneWidget);
+    expect(find.text(DateFormat('MMMM yyyy').format(now)), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(Key('calendar-day-${now.year}-${now.month}-${now.day}')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(DateFormat('EEE, MMM d, yyyy').format(now)),
+      findsOneWidget,
+    );
+    expect(find.text('Study Flutter'), findsOneWidget);
+
+    await tester.tap(find.text('Study Flutter'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Task details'), findsOneWidget);
+  });
+
+  testWidgets('calendar switches to year and week views', (
+    WidgetTester tester,
+  ) async {
+    final DateTime now = DateTime.now();
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+
+    await _pumpApp(tester, store);
+    await tester.tap(find.byIcon(Icons.calendar_month_outlined));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('calendar-view-year')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('${now.year}'), findsOneWidget);
+    expect(find.text('January'), findsOneWidget);
+
+    await tester.tap(find.text('January'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('January ${now.year}'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('calendar-today')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('calendar-view-week')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(Key('calendar-week-day-${now.year}-${now.month}-${now.day}')),
+      findsOneWidget,
+    );
+    expect(find.text('Study Flutter'), findsOneWidget);
+  });
+
+  testWidgets('calendar previous, next, and today navigation updates period', (
+    WidgetTester tester,
+  ) async {
+    final DateTime now = DateTime.now();
+    final DateTime nextMonth = DateTime(now.year, now.month + 1, 1);
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+
+    await _pumpApp(tester, store);
+    await tester.tap(find.byIcon(Icons.calendar_month_outlined));
+    await tester.pumpAndSettle();
+
+    final String currentLabel = DateFormat('MMMM yyyy').format(now);
+    final String nextLabel = DateFormat('MMMM yyyy').format(nextMonth);
+
+    await tester.tap(find.byKey(const Key('calendar-next')));
+    await tester.pumpAndSettle();
+    expect(find.text(nextLabel), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('calendar-previous')));
+    await tester.pumpAndSettle();
+    expect(find.text(currentLabel), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('calendar-next')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('calendar-today')));
+    await tester.pumpAndSettle();
+    expect(find.text(currentLabel), findsOneWidget);
+  });
+
+  test('pending filter excludes completed, overdue, and includes today/no-date tasks', () {
+    final DateTime now = DateTime.now();
+    final List<Task> tasks = [
+      Task(
+        id: 1,
+        title: 'Completed today',
+        description: '',
+        isCompleted: true,
+        createdAt: now,
+        dueDate: now,
+      ),
+      Task(
+        id: 2,
+        title: 'Due today',
+        description: '',
+        isCompleted: false,
+        createdAt: now,
+        dueDate: now,
+      ),
+      Task(
+        id: 3,
+        title: 'No due date',
+        description: '',
+        isCompleted: false,
+        createdAt: now,
+      ),
+      Task(
+        id: 4,
+        title: 'Overdue',
+        description: '',
+        isCompleted: false,
+        createdAt: now,
+        dueDate: now.subtract(const Duration(days: 2)),
+      ),
+    ];
+
+    final List<Task> pending = filterTasks(tasks, TaskFilter.pending);
+
+    expect(
+      pending.map((task) => task.title),
+      containsAll(['Due today', 'No due date']),
+    );
+    expect(pending, hasLength(2));
+    expect(filterTasks(tasks, TaskFilter.completed), hasLength(1));
+    expect(filterTasks(tasks, TaskFilter.overdue), hasLength(1));
+  });
+
+  test('notification payloads identify the correct task', () {
+    expect(NotificationService.parseTaskIdFromPayload('task:42'), 42);
+    expect(NotificationService.parseTaskIdFromPayload('42'), 42);
+    expect(NotificationService.parseTaskIdFromPayload('task: 7'), 7);
+    expect(NotificationService.parseTaskIdFromPayload(null), isNull);
+    expect(NotificationService.parseTaskIdFromPayload(''), isNull);
+    expect(NotificationService.parseTaskIdFromPayload('task:'), isNull);
+    expect(NotificationService.parseTaskIdFromPayload('task:abc'), isNull);
+    expect(NotificationService.parseTaskIdFromPayload('task:0'), isNull);
+    expect(NotificationService.parseTaskIdFromPayload('task:-3'), isNull);
+  });
+
+  test('notification content uses the task title and description', () {
+    final Task task = Task(
+      id: 5,
+      title: 'Complete Flutter To-Do App',
+      description:
+          'Finish implementing notification navigation and test the '
+          'reminder functionality.',
+      isCompleted: false,
+      createdAt: DateTime.utc(2026, 1, 1),
+    );
+
+    expect(
+      NotificationService.notificationTitleFor(task),
+      'Complete Flutter To-Do App',
+    );
+    expect(
+      NotificationService.notificationBodyFor(task),
+      'Finish implementing notification navigation and test the reminder '
+      'functionality.',
+    );
+    expect(NotificationService.payloadForTask(task.id), 'task:5');
+  });
+
+  test('notification content falls back when a task has no description', () {
+    final Task task = Task(
+      id: 6,
+      title: 'No description',
+      description: '   ',
+      isCompleted: false,
+      createdAt: DateTime.utc(2026, 1, 1),
+    );
+
+    expect(
+      NotificationService.notificationBodyFor(task),
+      NotificationService.emptyDescriptionFallback,
+    );
+  });
+
+  testWidgets('launching from a reminder opens that task details screen', (
+    WidgetTester tester,
+  ) async {
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+    await tester.binding.setSurfaceSize(const Size(430, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MyApp(
+        taskService: TaskService(store: store),
+        initialNotificationTaskId: 2,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Task details'), findsOneWidget);
+    expect(find.text('Build To-Do UI'), findsOneWidget);
+    expect(find.text('Create the first mobile interface'), findsOneWidget);
+    expect(find.text('My Tasks'), findsNothing);
+  });
+
+  testWidgets('a reminder for a deleted task shows a friendly message', (
+    WidgetTester tester,
+  ) async {
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+    await tester.binding.setSurfaceSize(const Size(430, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MyApp(
+        taskService: TaskService(store: store),
+        initialNotificationTaskId: 999,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Task details'), findsOneWidget);
+    expect(find.text('This task no longer exists.'), findsOneWidget);
+  });
+
+  testWidgets('tapping a reminder while the app is running opens the task', (
+    WidgetTester tester,
+  ) async {
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+    final AppController controller = AppController(
+      taskService: TaskService(store: store),
+    );
+    await tester.binding.setSurfaceSize(const Size(430, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(MyApp(appController: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('My Tasks'), findsOneWidget);
+
+    controller.notificationService.handleNotificationPayload('task:3');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Task details'), findsOneWidget);
+    expect(find.text('Connect API'), findsOneWidget);
+    expect(
+      find.text('Later connect the Flutter app to the backend'),
+      findsOneWidget,
+    );
   });
 }

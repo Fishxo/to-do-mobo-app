@@ -49,6 +49,7 @@ class StatisticsService {
     );
 
     int completed = 0;
+    int pending = 0;
     int overdue = 0;
     int dueThisWeek = 0;
     int completedDueThisWeek = 0;
@@ -61,6 +62,8 @@ class StatisticsService {
         completed++;
       } else if (task.isOverdue) {
         overdue++;
+      } else {
+        pending++;
       }
 
       final DateTime? dueDate = task.dueDate;
@@ -108,7 +111,7 @@ class StatisticsService {
     return TaskStatistics(
       total: tasks.length,
       completed: completed,
-      pending: tasks.length - completed,
+      pending: pending,
       overdue: overdue,
       weeklyCompletionPercentage: weeklyPercentage,
       weeklyDueTasks: dueThisWeek,
