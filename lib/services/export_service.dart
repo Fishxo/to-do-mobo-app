@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/category.dart';
+import '../models/recurrence.dart';
 import '../models/subtask.dart';
 import '../models/task.dart';
 import '../models/task_priority.dart';
@@ -57,7 +58,15 @@ class ExportService {
               'isCompleted': task.isCompleted,
               'priority': task.priority.name,
               'dueDate': task.dueDate?.toIso8601String(),
+              'endAt': task.endAt?.toIso8601String(),
               'reminderAt': task.reminderAt?.toIso8601String(),
+              'isAllDay': task.isAllDay,
+              'recurrence': task.recurrence.value,
+              'recurrenceInterval': task.recurrenceInterval,
+              'recurrenceUnit': task.recurrenceUnit.value,
+              'recurrenceWeekdays': task.recurrenceWeekdays,
+              'recurrenceEndDate': task.recurrenceEndDate?.toIso8601String(),
+              'recurrenceCount': task.recurrenceCount,
               'createdAt': task.createdAt.toIso8601String(),
               'updatedAt': task.updatedAt.toIso8601String(),
               'completedAt': task.completedAt?.toIso8601String(),
@@ -202,7 +211,20 @@ class ExportService {
               : categoriesByName[categoryName.toLowerCase()]?.id,
           priority: TaskPriority.fromName(item['priority'] as String?),
           dueDate: _date(item['dueDate']),
+          endAt: _date(item['endAt']),
           reminderAt: _date(item['reminderAt']),
+          isAllDay: item['isAllDay'] as bool? ?? false,
+          recurrence: RecurrencePattern.fromValue(item['recurrence']),
+          recurrenceInterval:
+              (item['recurrenceInterval'] as num?)?.toInt() ?? 1,
+          recurrenceUnit: RecurrenceUnit.fromValue(item['recurrenceUnit']),
+          recurrenceWeekdays: (item['recurrenceWeekdays'] as List<dynamic>? ??
+                  const [])
+              .whereType<num>()
+              .map((day) => day.toInt())
+              .toList(growable: false),
+          recurrenceEndDate: _date(item['recurrenceEndDate']),
+          recurrenceCount: (item['recurrenceCount'] as num?)?.toInt(),
           updatedAt: _date(item['updatedAt']) ?? createdAt,
           completedAt: _date(item['completedAt']),
           subtasks: subtasks,

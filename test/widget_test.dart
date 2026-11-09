@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest_all.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:todoapp/main.dart';
+import 'package:todoapp/models/app_notification.dart';
 import 'package:todoapp/models/category.dart';
 import 'package:todoapp/models/subtask.dart';
 import 'package:todoapp/models/task.dart';
+import 'package:todoapp/models/task_occurrence.dart';
 import 'package:todoapp/models/task_priority.dart';
 import 'package:todoapp/services/database_service.dart';
 import 'package:todoapp/services/notification_service.dart';
@@ -14,7 +18,7 @@ import 'package:todoapp/services/task_service.dart';
 import 'package:todoapp/state/app_controller.dart';
 import 'package:todoapp/utils/task_filters.dart';
 
-class _InMemoryTaskStore implements TaskStore {
+class _InMemoryTaskStore implements TaskStore, NotificationStore {
   _InMemoryTaskStore([Iterable<Task> tasks = const []])
     : _tasks = List<Task>.from(tasks) {
     for (final Task task in _tasks) {
@@ -29,10 +33,13 @@ class _InMemoryTaskStore implements TaskStore {
   final List<Task> _tasks;
   final List<Category> _categories = [];
   final List<Subtask> _subtasks = [];
+  final List<AppNotification> _notifications = [];
+  final Map<String, TaskOccurrenceState> _occurrenceStates = {};
 
   int _nextTaskId = 1;
   int _nextCategoryId = 1;
   int _nextSubtaskId = 1;
+  int _nextNotificationId = 1;
 
   List<Task> get tasks => List<Task>.unmodifiable(_tasks);
   List<Category> get categories => List<Category>.unmodifiable(_categories);
@@ -80,6 +87,11 @@ class _InMemoryTaskStore implements TaskStore {
   Future<void> deleteTask(int id) async {
     _tasks.removeWhere((task) => task.id == id);
     _subtasks.removeWhere((subtask) => subtask.taskId == id);
+    for (int index = 0; index < _notifications.length; index++) {
+      if (_notifications[index].taskId == id) {
+        _notifications[index] = _notifications[index].copyWith(taskId: null);
+      }
+    }
   }
 
   @override
@@ -147,6 +159,157 @@ class _InMemoryTaskStore implements TaskStore {
         .toList();
     _tasks.removeWhere((task) => task.isCompleted);
     _subtasks.removeWhere((subtask) => completedIds.contains(subtask.taskId));
+  }
+
+  @override
+  Future<List<AppNotification>> getNotifications() async {
+    final List<AppNotification> notifications =
+        List<AppNotification>.from(
+          _notifications.where((item) => !item.isCleared),
+        )..sort((a, b) {
+          final int byDate = b.eventAt.compareTo(a.eventAt);
+          if (byDate != 0) return byDate;
+          return b.id.compareTo(a.id);
+        });
+    return notifications;
+  }
+
+  @override
+  Future<bool> insertNotificationIfAbsent(AppNotification notification) async {
+    if (_notifications.any(
+      (item) => item.dedupeKey == notification.dedupeKey,
+    )) {
+      return false;
+    }
+    _notifications.add(notification.copyWith(id: _nextNotificationId++));
+    return true;
+  }
+
+  @override
+  Future<void> markNotificationRead(int id) async {
+    final int index = _notifications.indexWhere((item) => item.id == id);
+    if (index == -1) return;
+    if (_notifications[index].isRead) return;
+    _notifications[index] = _notifications[index].copyWith(
+      readAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> markAllNotificationsRead() async {
+    final DateTime now = DateTime.now();
+    for (int index = 0; index < _notifications.length; index++) {
+      if (!_notifications[index].isRead) {
+        _notifications[index] = _notifications[index].copyWith(readAt: now);
+      }
+    }
+  }
+
+  @override
+  Future<void> deleteNotification(int id) async {
+    final int index = _notifications.indexWhere((item) => item.id == id);
+    if (index == -1 || _notifications[index].isCleared) return;
+    _notifications[index] = _notifications[index].copyWith(
+      clearedAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> clearNotifications() async {
+    final DateTime now = DateTime.now();
+    for (int index = 0; index < _notifications.length; index++) {
+      if (!_notifications[index].isCleared) {
+        _notifications[index] = _notifications[index].copyWith(clearedAt: now);
+      }
+    }
+  }
+
+  @override
+  Future<void> clearNotificationsForTask(int taskId) async {
+    final DateTime now = DateTime.now();
+    for (int index = 0; index < _notifications.length; index++) {
+      final AppNotification notification = _notifications[index];
+      if (notification.taskId == taskId && !notification.isCleared) {
+        _notifications[index] = notification.copyWith(clearedAt: now);
+      }
+    }
+  }
+
+  @override
+  Future<List<TaskOccurrenceState>> getOccurrenceStates() async {
+    return _occurrenceStates.values.toList(growable: false);
+  }
+
+  @override
+  Future<void> setOccurrenceCompleted(
+    int taskId,
+    DateTime occurrenceAt,
+    bool isCompleted,
+  ) async {
+    final DateTime now = DateTime.now().toUtc();
+    final TaskOccurrenceState state = TaskOccurrenceState(
+      taskId: taskId,
+      occurrenceAt: occurrenceAt,
+      isCompleted: isCompleted,
+      isExcluded: false,
+      completedAt: isCompleted ? now : null,
+      updatedAt: now,
+    );
+    _occurrenceStates[state.key] = state;
+  }
+
+  @override
+  Future<void> setOccurrenceExcluded(int taskId, DateTime occurrenceAt) async {
+    final DateTime now = DateTime.now().toUtc();
+    final TaskOccurrenceState state = TaskOccurrenceState(
+      taskId: taskId,
+      occurrenceAt: occurrenceAt,
+      isCompleted: false,
+      isExcluded: true,
+      updatedAt: now,
+    );
+    _occurrenceStates[state.key] = state;
+  }
+
+  @override
+  Future<void> setOccurrenceSeriesCompletedFrom(
+    int taskId,
+    DateTime occurrenceAt,
+    bool isCompleted,
+  ) async {
+    final DateTime from = occurrenceAt.toUtc();
+    final int index = _tasks.indexWhere((t) => t.id == taskId);
+    if (index != -1) {
+      _tasks[index] = _tasks[index].copyWith(
+        seriesCompletedFrom: isCompleted ? from : null,
+        seriesCompleted: false,
+        isCompleted: false,
+        completedAt: null,
+      );
+    }
+    _occurrenceStates.removeWhere(
+      (key, state) => state.taskId == taskId && !state.isExcluded && !state.occurrenceAt.toUtc().isBefore(from),
+    );
+    if (!isCompleted) {
+      await setOccurrenceCompleted(taskId, occurrenceAt, false);
+    }
+  }
+
+  @override
+  Future<void> setSeriesCompleted(int taskId, bool isCompleted) async {
+    final DateTime now = DateTime.now().toUtc();
+    final int index = _tasks.indexWhere((t) => t.id == taskId);
+    if (index != -1) {
+      _tasks[index] = _tasks[index].copyWith(
+        seriesCompleted: isCompleted,
+        seriesCompletedFrom: null,
+        isCompleted: isCompleted,
+        completedAt: isCompleted ? now : null,
+      );
+    }
+    _occurrenceStates.removeWhere(
+      (key, state) => state.taskId == taskId && !state.isExcluded,
+    );
   }
 }
 
@@ -232,9 +395,53 @@ void main() {
     expect(restored.isCompleted, isTrue);
     expect(restored.categoryId, 2);
     expect(restored.priority, TaskPriority.high);
-    expect(restored.dueDate, dueDate);
-    expect(restored.reminderAt, reminderAt);
-    expect(restored.createdAt, createdAt);
+    expect(restored.dueDate!.toUtc(), dueDate.toUtc());
+    expect(restored.reminderAt!.toUtc(), reminderAt.toUtc());
+    expect(restored.createdAt.toUtc(), createdAt.toUtc());
+  });
+
+  test('13:15 Africa/Addis_Ababa survives persistence and scheduling', () {
+    tz_data.initializeTimeZones();
+    final tz.Location addis = tz.getLocation('Africa/Addis_Ababa');
+    final tz.TZDateTime selectedReminder = tz.TZDateTime(
+      addis,
+      2026,
+      11,
+      10,
+      13,
+      15,
+    );
+    final Task selectedTask = Task(
+      id: 21,
+      title: 'Local-time reminder',
+      description: '',
+      isCompleted: false,
+      createdAt: selectedReminder,
+      reminderAt: selectedReminder,
+    );
+
+    final Map<String, dynamic> sqliteRow = selectedTask.toMap();
+    expect(sqliteRow['reminder_at'], '2026-11-10T10:15:00.000Z');
+
+    final Task restoredTask = Task.fromMap(sqliteRow);
+    final DateTime restoredReminder = restoredTask.reminderAt!;
+    expect(
+      restoredReminder.millisecondsSinceEpoch,
+      selectedReminder.millisecondsSinceEpoch,
+    );
+    final tz.TZDateTime restoredInAddis = tz.TZDateTime.from(
+      restoredReminder,
+      addis,
+    );
+    expect(restoredInAddis.hour, 13);
+    expect(restoredInAddis.minute, 15);
+
+    final tz.TZDateTime scheduled = NotificationService.scheduledDateFor(
+      restoredReminder,
+    );
+    final tz.TZDateTime scheduledInAddis = tz.TZDateTime.from(scheduled, addis);
+    expect(scheduledInAddis.hour, 13);
+    expect(scheduledInAddis.minute, 15);
   });
 
   test('Task can omit its id when inserting into SQLite', () {
@@ -531,6 +738,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('notification-display-settings')), findsOneWidget);
     await tester.tap(find.text('Dark'));
     await tester.pumpAndSettle();
 
@@ -691,6 +899,16 @@ void main() {
     expect(NotificationService.parseTaskIdFromPayload('task:-3'), isNull);
   });
 
+  test('Android reminders use a heads-up capable channel', () {
+    final channel = NotificationService.androidReminderChannel;
+
+    expect(channel.id, NotificationService.androidChannelId);
+    expect(channel.importance.value, greaterThanOrEqualTo(4));
+    expect(channel.playSound, isTrue);
+    expect(channel.enableVibration, isTrue);
+    expect(channel.showBadge, isTrue);
+  });
+
   test('notification content uses the task title and description', () {
     final Task task = Task(
       id: 5,
@@ -793,5 +1011,108 @@ void main() {
       find.text('Later connect the Flutter app to the backend'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('reports tab shows period insights and navigation', (
+    WidgetTester tester,
+  ) async {
+    final DateTime now = DateTime.now();
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+
+    await _pumpApp(tester, store);
+    await tester.tap(find.byIcon(Icons.insights_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reports & Insights'), findsOneWidget);
+    expect(find.text('Task breakdown'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Current'), findsOneWidget);
+    expect(find.text('Study Flutter'), findsWidgets);
+
+    await tester.tap(find.byKey(const Key('reports-previous')));
+    await tester.pumpAndSettle();
+    expect(find.text('Current'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('reports-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('Current'), findsOneWidget);
+
+    await tester.tap(find.text('Monthly'));
+    await tester.pumpAndSettle();
+    expect(find.text('Monthly report'), findsOneWidget);
+
+    await tester.tap(find.text('Yearly'));
+    await tester.pumpAndSettle();
+    expect(find.text('January – December ${now.year}'), findsOneWidget);
+  });
+
+  testWidgets('notification center shows unread items and opens tasks', (
+    WidgetTester tester,
+  ) async {
+    final _InMemoryTaskStore store = _InMemoryTaskStore(_sampleTasks());
+
+    await _pumpApp(tester, store);
+    await tester.tap(find.byTooltip('Notifications'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Notifications'), findsOneWidget);
+    expect(find.text('Appointment missed'), findsOneWidget);
+    expect(find.text('Unread'), findsOneWidget);
+
+    await tester.tap(find.text('Appointment missed'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Task details'), findsOneWidget);
+    expect(find.text('Connect API'), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Read'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('notifications-clear')));
+    await tester.pumpAndSettle();
+    expect(find.text('Clear notifications?'), findsOneWidget);
+
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No notifications'), findsOneWidget);
+  });
+
+  testWidgets('individual notifications can be deleted', (
+    WidgetTester tester,
+  ) async {
+    final DateTime now = DateTime.now();
+    final _InMemoryTaskStore store = _InMemoryTaskStore([
+      ..._sampleTasks(),
+      Task(
+        id: 4,
+        title: 'Second overdue task',
+        description: 'Also missed its due time',
+        isCompleted: false,
+        createdAt: DateTime(2026, 1, 1, 0, 3),
+        dueDate: now.subtract(const Duration(hours: 3)),
+      ),
+    ]);
+
+    await _pumpApp(tester, store);
+    await tester.tap(find.byTooltip('Notifications'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Appointment missed'), findsNWidgets(2));
+    expect(find.byTooltip('Delete notification'), findsNWidgets(2));
+
+    await tester.tap(find.byTooltip('Delete notification').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Appointment missed'), findsOneWidget);
+    expect(await store.getNotifications(), hasLength(1));
+
+    await tester.pump(const Duration(seconds: 31));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Appointment missed'), findsOneWidget);
+    expect(await store.getNotifications(), hasLength(1));
   });
 }

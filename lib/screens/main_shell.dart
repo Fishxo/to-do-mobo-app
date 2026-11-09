@@ -4,6 +4,7 @@ import '../state/app_controller.dart';
 import 'calendar_screen.dart';
 import 'categories_screen.dart';
 import 'home_screen.dart';
+import 'reports_screen.dart';
 import 'settings_screen.dart';
 
 class MainShell extends StatefulWidget {
@@ -52,9 +53,10 @@ class _MainShellState extends State<MainShell> {
           children: [
             HomeScreen(
               controller: widget.controller,
-              onOpenSettings: () => _goTo(3),
+              onOpenSettings: () => _goTo(4),
             ),
             CalendarScreen(controller: widget.controller),
+            ReportsScreen(controller: widget.controller),
             CategoriesScreen(controller: widget.controller),
             SettingsScreen(controller: widget.controller),
           ],
@@ -72,6 +74,11 @@ class _MainShellState extends State<MainShell> {
               icon: Icon(Icons.calendar_month_outlined),
               selectedIcon: Icon(Icons.calendar_month_rounded),
               label: 'Calendar',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.insights_outlined),
+              selectedIcon: Icon(Icons.insights_rounded),
+              label: 'Reports',
             ),
             NavigationDestination(
               icon: Icon(Icons.category_outlined),

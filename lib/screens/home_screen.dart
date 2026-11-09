@@ -10,7 +10,9 @@ import '../widgets/empty_task_view.dart';
 import '../widgets/section_header.dart';
 import '../widgets/stat_card.dart';
 import '../widgets/task_item.dart';
+import '../widgets/recurring_completion_dialog.dart';
 import 'add_task_screen.dart';
+import 'notification_center_screen.dart';
 import 'task_details_screen.dart';
 
 /// Filters use the shared TaskFilter from task_filters.dart.
@@ -137,6 +139,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _toggleTask(Task task) async {
     try {
+      if (task.isRecurring && task.dueDate != null) {
+        final scope = await showRecurringCompletionDialog(
+          context,
+          completing: !task.isCompleted,
+          occurrenceAt: task.dueDate!,
+        );
+        if (scope == null) return;
+        await _controller.applyTaskCompletion(
+          taskId: task.id,
+          isCompleted: !task.isCompleted,
+          occurrenceAt: task.dueDate!,
+          scope: scope,
+        );
+        return;
+      }
       await _controller.toggleTask(task.id);
     } catch (_) {
       _showError('Could not update the task. Please try again.');
@@ -181,40 +198,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _showNotificationInfo() async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        final bool enabled = _controller.settings.notificationsEnabled;
-        final bool permission = _controller.notificationPermissionGranted;
-        final String message = !enabled
-            ? 'Notifications are turned off. Enable them in Settings to get '
-                  'reminders for your tasks.'
-            : permission
-            ? 'Notifications are enabled. Reminders will appear at the time '
-                  'you choose for each task.'
-            : 'Notifications are enabled, but permission has not been granted. '
-                  'Open Settings and turn notifications off and on again to '
-                  'request permission.';
-        return AlertDialog(
-          icon: const Icon(Icons.notifications_active_outlined),
-          title: const Text('Reminders'),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                widget.onOpenSettings?.call();
-              },
-              child: const Text('Open settings'),
-            ),
-          ],
-        );
-      },
+  Future<void> _openNotifications() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NotificationCenterScreen(controller: _controller),
+      ),
     );
   }
 
@@ -270,10 +259,17 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ),
-                          IconButton.filledTonal(
-                            tooltip: 'Reminders',
-                            onPressed: _showNotificationInfo,
-                            icon: const Icon(Icons.notifications_none_rounded),
+                          Badge.count(
+                            count: _controller.unreadNotificationCount,
+                            isLabelVisible:
+                                _controller.unreadNotificationCount > 0,
+                            child: IconButton.filledTonal(
+                              tooltip: 'Notifications',
+                              onPressed: _openNotifications,
+                              icon: const Icon(
+                                Icons.notifications_none_rounded,
+                              ),
+                            ),
                           ),
                           const SizedBox(width: 8),
                           InkWell(
