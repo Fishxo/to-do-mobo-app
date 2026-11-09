@@ -56,6 +56,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _openNotificationDisplaySettings() async {
+    final bool opened = await _controller.notificationService
+        .openAndroidNotificationSettings();
+    if (!mounted || opened) return;
+    _showMessage(
+      'Open your device Settings → Apps → Todo App → Notifications. Enable '
+      'Task reminders, Show as pop-up, and App icon badges.',
+    );
+  }
+
   Future<void> _exportTasks() async {
     setState(() => _isBusy = true);
     try {
@@ -283,6 +293,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onChanged: _isBusy
                               ? null
                               : (value) => _toggleNotifications(value),
+                        ),
+                        const Divider(),
+                        ListTile(
+                          key: const Key('notification-display-settings'),
+                          leading: const Icon(Icons.tune_rounded),
+                          title: const Text('Pop-up and app icon badges'),
+                          subtitle: const Text(
+                            'Configure these in your device notification settings',
+                          ),
+                          trailing: const Icon(Icons.open_in_new_rounded),
+                          onTap: _openNotificationDisplaySettings,
                         ),
                         const Divider(),
                         ListTile(

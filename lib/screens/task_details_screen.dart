@@ -7,6 +7,7 @@ import '../state/app_controller.dart';
 import '../utils/category_style.dart';
 import '../utils/formatting.dart';
 import '../utils/theme_colors.dart';
+import '../widgets/recurring_completion_dialog.dart';
 import 'add_task_screen.dart';
 
 class TaskDetailsScreen extends StatelessWidget {
@@ -84,7 +85,24 @@ class TaskDetailsScreen extends StatelessWidget {
             actions: [
               IconButton(
                 tooltip: task.isCompleted ? 'Reopen task' : 'Mark complete',
-                onPressed: () => controller.toggleTask(task.id),
+                onPressed: () async {
+                  if (task.isRecurring && task.dueDate != null) {
+                    final scope = await showRecurringCompletionDialog(
+                      context,
+                      completing: !task.isCompleted,
+                      occurrenceAt: task.dueDate!,
+                    );
+                    if (scope == null) return;
+                    await controller.applyTaskCompletion(
+                      taskId: task.id,
+                      isCompleted: !task.isCompleted,
+                      occurrenceAt: task.dueDate!,
+                      scope: scope,
+                    );
+                    return;
+                  }
+                  await controller.toggleTask(task.id);
+                },
                 icon: Icon(
                   task.isCompleted
                       ? Icons.check_circle_rounded
@@ -180,14 +198,24 @@ class TaskDetailsScreen extends StatelessWidget {
                     children: [
                       _InfoRow(
                         icon: Icons.event_outlined,
-                        label: 'Due date',
+                        label: task.isAllDay ? 'Date' : 'Due date',
                         value: task.dueDate == null
                             ? 'Not set'
+                            : task.isAllDay
+                            ? '${formatShortDate(task.dueDate!)} · All day'
                             : formatDateTime(task.dueDate!),
                         valueColor: task.isOverdue
                             ? theme.colorScheme.error
                             : null,
                       ),
+                      if (!task.isAllDay && task.endAt != null) ...[
+                        const Divider(),
+                        _InfoRow(
+                          icon: Icons.schedule_send_rounded,
+                          label: 'End time',
+                          value: formatDateTime(task.endAt!),
+                        ),
+                      ],
                       const Divider(),
                       _InfoRow(
                         icon: Icons.notifications_none_rounded,
@@ -196,6 +224,30 @@ class TaskDetailsScreen extends StatelessWidget {
                             ? 'Not set'
                             : formatDateTime(task.reminderAt!),
                       ),
+                      if (task.isRecurring) ...[
+                        const Divider(),
+                        _InfoRow(
+                          icon: Icons.repeat_rounded,
+                          label: 'Repeat',
+                          value: task.recurrenceDescription,
+                        ),
+                        if (task.recurrenceEndDate != null) ...[
+                          const Divider(),
+                          _InfoRow(
+                            icon: Icons.event_repeat_rounded,
+                            label: 'Repeat ends',
+                            value: formatShortDate(task.recurrenceEndDate!),
+                          ),
+                        ],
+                        if (task.recurrenceCount != null) ...[
+                          const Divider(),
+                          _InfoRow(
+                            icon: Icons.format_list_numbered_rounded,
+                            label: 'Occurrences',
+                            value: '${task.recurrenceCount}',
+                          ),
+                        ],
+                      ],
                       const Divider(),
                       _InfoRow(
                         icon: Icons.add_circle_outline_rounded,

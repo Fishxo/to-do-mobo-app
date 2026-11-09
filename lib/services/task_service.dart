@@ -1,5 +1,7 @@
+import '../models/recurrence.dart';
 import '../models/subtask.dart';
 import '../models/task.dart';
+import '../models/task_occurrence.dart';
 import '../models/task_priority.dart';
 import 'database_service.dart';
 
@@ -37,7 +39,15 @@ class TaskService {
     int? categoryId,
     TaskPriority priority = TaskPriority.medium,
     DateTime? dueDate,
+    DateTime? endAt,
     DateTime? reminderAt,
+    bool isAllDay = false,
+    RecurrencePattern recurrence = RecurrencePattern.never,
+    int recurrenceInterval = 1,
+    RecurrenceUnit recurrenceUnit = RecurrenceUnit.day,
+    List<int> recurrenceWeekdays = const [],
+    DateTime? recurrenceEndDate,
+    int? recurrenceCount,
     List<String> subtaskTitles = const [],
   }) async {
     final String trimmedTitle = title.trim();
@@ -55,7 +65,15 @@ class TaskService {
       categoryId: categoryId,
       priority: priority,
       dueDate: dueDate,
+      endAt: endAt,
       reminderAt: reminderAt,
+      isAllDay: isAllDay,
+      recurrence: recurrence,
+      recurrenceInterval: recurrenceInterval,
+      recurrenceUnit: recurrenceUnit,
+      recurrenceWeekdays: recurrenceWeekdays,
+      recurrenceEndDate: recurrenceEndDate,
+      recurrenceCount: recurrenceCount,
       updatedAt: now,
     );
 
@@ -181,5 +199,37 @@ class TaskService {
 
   Future<void> clearCompletedTasks() {
     return _store.clearCompletedTasks();
+  }
+
+  Future<List<TaskOccurrenceState>> getOccurrenceStates() {
+    return _store.getOccurrenceStates();
+  }
+
+  Future<void> setOccurrenceCompleted(
+    int taskId,
+    DateTime occurrenceAt,
+    bool isCompleted,
+  ) {
+    return _store.setOccurrenceCompleted(taskId, occurrenceAt, isCompleted);
+  }
+
+  Future<void> setOccurrenceExcluded(int taskId, DateTime occurrenceAt) {
+    return _store.setOccurrenceExcluded(taskId, occurrenceAt);
+  }
+
+  Future<void> setOccurrenceSeriesCompletedFrom(
+    int taskId,
+    DateTime occurrenceAt,
+    bool isCompleted,
+  ) {
+    return _store.setOccurrenceSeriesCompletedFrom(
+      taskId,
+      occurrenceAt,
+      isCompleted,
+    );
+  }
+
+  Future<void> setSeriesCompleted(int taskId, bool isCompleted) {
+    return _store.setSeriesCompleted(taskId, isCompleted);
   }
 }

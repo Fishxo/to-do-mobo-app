@@ -15,10 +15,34 @@ class NotificationService {
 
   static final NotificationService instance = NotificationService();
 
-  static const String _channelId = 'task_reminders';
+  // Android never allows raising importance on an existing channel. v4 forces
+  // devices that may have cached an earlier low-importance v3 channel onto a
+  // fresh HIGH channel. Startup then cancels and rebuilds pending reminders.
+  static const String androidChannelId = 'task_reminders_v4_heads_up';
+  static const String _channelId = androidChannelId;
+  static const List<String> _legacyChannelIds = <String>[
+    'task_reminders',
+    'task_reminders_v2_high',
+    'task_reminders_v3_heads_up',
+  ];
   static const String _channelName = 'Task reminders';
   static const String _channelDescription =
       'Reminders for tasks with a selected time';
+
+  /// Canonical Android channel configuration used for both channel creation
+  /// and all scheduled reminder/due notifications.
+  static const AndroidNotificationChannel androidReminderChannel =
+      AndroidNotificationChannel(
+        androidChannelId,
+        _channelName,
+        description: _channelDescription,
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+        enableLights: true,
+        showBadge: true,
+        audioAttributesUsage: AudioAttributesUsage.notification,
+      );
 
   /// Prefix used in the notification payload so a task id can be recognised
   /// even if another notification type is added later.
@@ -26,6 +50,21 @@ class NotificationService {
 
   /// Shown when a task has no description instead of leaving the body empty.
   static const String emptyDescriptionFallback = 'Tap to view this task.';
+
+  /// Due alerts use a different platform notification id from reminders so
+  /// both can coexist for the same task without overwriting each other.
+  static const int dueAlertIdOffset = 500000;
+
+  static int dueAlertIdForTask(int taskId) => dueAlertIdOffset + taskId;
+
+  static String dueAlertTitleFor(Task task) => 'Task due: ${task.title}';
+
+  /// Converts an intended local DateTime into the absolute instant accepted
+  /// by zonedSchedule. UTC is used as the TZDateTime location intentionally:
+  /// the instant is preserved, and Android renders/delivers it in device time.
+  static tz.TZDateTime scheduledDateFor(DateTime scheduledAt) {
+    return tz.TZDateTime.from(scheduledAt.toUtc(), tz.UTC);
+  }
 
   final FlutterLocalNotificationsPlugin _plugin;
 
@@ -145,6 +184,7 @@ class NotificationService {
         ),
         onDidReceiveNotificationResponse: _handleNotificationResponse,
       );
+      await _configureAndroidChannel();
       _initialized = true;
     } catch (error) {
       _initialized = false;
@@ -164,9 +204,16 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin
           >();
       if (android != null) {
-        final bool? granted = await android.requestNotificationsPermission();
+            // Check first so Android 13+ is prompted only when needed, then query
+            // again: a null/failed request result must never be treated as granted.
+            final bool enabledBeforeRequest =
+                await android.areNotificationsEnabled() ?? false;
+            if (!enabledBeforeRequest) {
+              await android.requestNotificationsPermission();
+            }
+            _permissionGranted =
+                await android.areNotificationsEnabled() ?? false;
         await android.requestExactAlarmsPermission();
-        _permissionGranted = granted ?? false;
         return _permissionGranted;
       }
 
@@ -193,12 +240,132 @@ class NotificationService {
     }
   }
 
+  /// Opens Android's notification settings for this app. Android owns the
+  /// final pop-up and launcher-badge preferences, so they cannot be enabled
+  /// or overridden by notification payload flags.
+  Future<bool> openAndroidNotificationSettings() async {
+    try {
+      final AndroidFlutterLocalNotificationsPlugin? android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      return await android?.openAppNotificationSettings() ?? false;
+    } catch (error) {
+      debugPrint('Could not open Android notification settings: $error');
+      return false;
+    }
+  }
+
+  Future<void> _configureAndroidChannel() async {
+    final AndroidFlutterLocalNotificationsPlugin? android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (android == null) return;
+
+    for (final String legacyId in _legacyChannelIds) {
+      try {
+        // Remove legacy channels so stale importance/sound settings do not
+        // interfere on devices that still have them cached.
+        await android.deleteNotificationChannel(channelId: legacyId);
+      } catch (error) {
+        debugPrint('Could not delete legacy notification channel $legacyId: $error');
+      }
+    }
+
+    try {
+      await android.createNotificationChannel(androidReminderChannel);
+      final List<AndroidNotificationChannel>? channels = await android
+          .getNotificationChannels();
+      AndroidNotificationChannel? configured;
+      if (channels != null) {
+        for (final AndroidNotificationChannel channel in channels) {
+          if (channel.id == _channelId) {
+            configured = channel;
+            break;
+          }
+        }
+      }
+      if (configured != null &&
+          (configured.importance.value < Importance.high.value ||
+              !configured.playSound ||
+            !configured.enableVibration ||
+            !configured.showBadge)) {
+        debugPrint(
+          'Reminder channel $_channelId is restricted by Android settings '
+          '(importance=${configured.importance}, sound=${configured.playSound}, '
+          'vibration=${configured.enableVibration}, badge=${configured.showBadge}). '
+          'Enable pop-up, sound, vibration, and app-icon badges for this '
+          'channel in system settings.',
+        );
+      }
+    } catch (error) {
+      // Do not silently schedule to an unknown/default channel. Initialization
+      // will fail and can be retried on the next app launch.
+      debugPrint('Could not create or inspect notification channel: $error');
+      rethrow;
+    }
+  }
+
   /// Schedules a reminder for [task]. Returns false when the reminder is in
   /// the past or the platform refused to schedule it.
   Future<bool> scheduleTaskReminder(Task task) async {
     final DateTime? reminderAt = task.reminderAt;
-    if (reminderAt == null || task.isCompleted) return false;
-    if (!reminderAt.isAfter(DateTime.now())) return false;
+    if (reminderAt == null) return false;
+
+    return scheduleTaskReminderAt(task, reminderAt);
+  }
+
+  /// Schedules a reminder at an explicit time, which is used for recurring
+  /// occurrences. [notificationId] must be unique per occurrence so later
+  /// occurrences do not replace earlier ones.
+  Future<bool> scheduleTaskReminderAt(
+    Task task,
+    DateTime scheduledAt, [
+    int? notificationId,
+  ]) async {
+    if (task.isCompleted) return false;
+
+    return _scheduleTaskNotification(
+      task,
+      notificationId: notificationId ?? task.id,
+      scheduledAt: scheduledAt,
+      title: notificationTitleFor(task),
+    );
+  }
+
+  /// Schedules an alert for when a task's due time arrives. This lets the
+  /// platform warn the user about an appointment even if the app is closed.
+  Future<bool> scheduleTaskDueAlert(Task task) async {
+    final DateTime? dueDate = task.dueDate;
+    if (dueDate == null) return false;
+
+    return scheduleTaskDueAlertAt(task, dueDate);
+  }
+
+  /// Schedules a due alert for one recurring occurrence at [scheduledAt].
+  Future<bool> scheduleTaskDueAlertAt(
+    Task task,
+    DateTime scheduledAt, [
+    int? notificationId,
+  ]) async {
+    if (task.isCompleted) return false;
+
+    return _scheduleTaskNotification(
+      task,
+      notificationId: notificationId ?? dueAlertIdForTask(task.id),
+      scheduledAt: scheduledAt,
+      title: dueAlertTitleFor(task),
+    );
+  }
+
+  Future<bool> _scheduleTaskNotification(
+    Task task, {
+    required int notificationId,
+    required DateTime scheduledAt,
+    required String title,
+  }) async {
+    if (!scheduledAt.isAfter(DateTime.now())) return false;
 
     await initialize();
     if (!_initialized) return false;
@@ -209,31 +376,38 @@ class NotificationService {
         _channelId,
         _channelName,
         channelDescription: _channelDescription,
-        importance: Importance.high,
-        priority: Priority.high,
+        importance: Importance.max,
+        priority: Priority.max,
+        onlyAlertOnce: true,
+        playSound: true,
+        enableVibration: true,
+        enableLights: true,
+        visibility: NotificationVisibility.public,
+        category: AndroidNotificationCategory.reminder,
+        when: scheduledAt.millisecondsSinceEpoch,
+        usesChronometer: false,
+        ticker: title,
+        channelShowBadge: true,
+        // Ask supported launchers (including Samsung One UI) to display a
+        // numeric count; Android may still honor the user's badge preference.
+        number: 1,
+        autoCancel: true,
         // Show the full description when the notification is expanded.
         styleInformation: description.isEmpty
             ? null
-            : BigTextStyleInformation(
-                description,
-                contentTitle: notificationTitleFor(task),
-              ),
+            : BigTextStyleInformation(description, contentTitle: title),
       ),
       iOS: DarwinNotificationDetails(),
       macOS: DarwinNotificationDetails(),
     );
 
-    final tz.TZDateTime scheduled = tz.TZDateTime.from(
-      reminderAt.toUtc(),
-      tz.UTC,
-    );
-    final String title = notificationTitleFor(task);
+    final tz.TZDateTime scheduled = scheduledDateFor(scheduledAt);
     final String body = notificationBodyFor(task);
     final String payload = payloadForTask(task.id);
 
     try {
       await _plugin.zonedSchedule(
-        id: task.id,
+        id: notificationId,
         title: title,
         body: body,
         scheduledDate: scheduled,
@@ -247,7 +421,7 @@ class NotificationService {
       // instead of silently dropping it.
       try {
         await _plugin.zonedSchedule(
-          id: task.id,
+          id: notificationId,
           title: title,
           body: body,
           scheduledDate: scheduled,
@@ -269,6 +443,42 @@ class NotificationService {
       await _plugin.cancel(id: taskId);
     } catch (error) {
       debugPrint('Could not cancel reminder: $error');
+    }
+  }
+
+  Future<void> cancelTaskDueAlert(int taskId) async {
+    if (!_initialized) return;
+    try {
+      await _plugin.cancel(id: dueAlertIdForTask(taskId));
+    } catch (error) {
+      debugPrint('Could not cancel due alert: $error');
+    }
+  }
+
+  /// Cancels the base and recurring-occurrence notifications scheduled for a
+  /// task. [maxOccurrences] should cover the window used when scheduling.
+  Future<void> cancelTaskNotifications(
+    int taskId, {
+    int maxOccurrences = 64,
+  }) async {
+    if (!_initialized) return;
+    for (int index = 0; index < maxOccurrences; index++) {
+      final int reminderId = taskId + (index * 1000000);
+      final int dueId = dueAlertIdForTask(taskId) + index;
+      try {
+        await _plugin.cancel(id: reminderId);
+      } catch (_) {}
+      try {
+        await _plugin.cancel(id: dueId);
+      } catch (_) {}
+      if (index == 0) {
+        try {
+          await _plugin.cancel(id: taskId);
+        } catch (_) {}
+        try {
+          await _plugin.cancel(id: dueAlertIdForTask(taskId));
+        } catch (_) {}
+      }
     }
   }
 
